@@ -1,12 +1,15 @@
 #[macro_use]
 extern crate glium;
-extern crate arcball;
-extern crate cgmath;
 
 use arcball::ArcballCamera;
-use cgmath::{Vector2, Vector3};
+use glium::glutin::dpi::PhysicalPosition;
+use glium::glutin::platform::run_return::EventLoopExtRunReturn;
 use glium::index::PrimitiveType;
 use glium::{glutin, Surface};
+use ultraviolet::{
+    projection::perspective_gl,
+    vec::{Vec2, Vec3},
+};
 
 #[derive(Copy, Clone)]
 struct Vertex {
@@ -21,9 +24,8 @@ implement_vertex!(Vertex, pos, color);
 
 fn main() {
     let window = glutin::window::WindowBuilder::new().with_title("Arcball Camera Cube Example");
-    let context = glutin::ContextBuilder::new()
-        .with_vsync(true);
-    let event_loop = glutin::event_loop::EventLoop::new();
+    let context = glutin::ContextBuilder::new().with_vsync(true);
+    let mut event_loop = glutin::event_loop::EventLoop::new();
 
     let display =
         glium::Display::new(window, context, &event_loop).expect("failed to create display");
@@ -125,88 +127,92 @@ fn main() {
     .unwrap();
 
     let display_dims = display.get_framebuffer_dimensions();
-    let persp_proj = cgmath::perspective(
-        cgmath::Deg(65.0),
+    let persp_proj = perspective_gl(
+        f32::to_radians(65.0),
         display_dims.0 as f32 / display_dims.1 as f32,
         1.0,
         200.0,
     );
     let mut arcball_camera = ArcballCamera::new(
-        Vector3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 0.0),
         1.0,
         [display_dims.0 as f32, display_dims.1 as f32],
     );
 
+    let draw_params = glium::DrawParameters {
+        depth: glium::Depth {
+            test: glium::draw_parameters::DepthTest::IfLess,
+            write: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     // Track if left/right mouse is down
-    let mut mouse_pressed = [false, false];
-    let mut prev_mouse = None;
+    let mut mouse_pressed = [false, false, false];
+    let mut prev_mouse: Option<PhysicalPosition<f64>> = None;
 
-    event_loop.run(move |event, _, control_flow| {
-        let mut should_quit = false;
-        println!("running");
-        match event {
-            glutin::event::Event::WindowEvent { event, .. } => match event {
-                glutin::event::WindowEvent::CloseRequested => should_quit = true,
-                glutin::event::WindowEvent::KeyboardInput { input, .. } => match input.virtual_keycode {
-                    Some(glutin::event::VirtualKeyCode::Escape) => should_quit = true,
+    let mut should_quit = false;
+    while !should_quit {
+        event_loop.run_return(|e, _, control_flow| {
+            control_flow.set_wait();
+            // println!("running");
+            match e {
+                glutin::event::Event::WindowEvent { event, .. } => match event {
+                    glutin::event::WindowEvent::CloseRequested => should_quit = true,
+                    glutin::event::WindowEvent::KeyboardInput { input, .. } => {
+                        match input.virtual_keycode {
+                            Some(glutin::event::VirtualKeyCode::Escape) => should_quit = true,
+                            _ => {}
+                        }
+                    }
+
+                    glutin::event::WindowEvent::MouseInput { state, button, .. } => {
+                        if button == glutin::event::MouseButton::Left {
+                            mouse_pressed[0] = state == glutin::event::ElementState::Pressed;
+                        } else if button == glutin::event::MouseButton::Right
+                            || button == glutin::event::MouseButton::Middle
+                        {
+                            mouse_pressed[1] = state == glutin::event::ElementState::Pressed;
+                        }
+                    }
+                    glutin::event::WindowEvent::MouseWheel { delta, .. } => {
+                        let y = match delta {
+                            glutin::event::MouseScrollDelta::LineDelta(_, y) => y,
+                            glutin::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                        };
+                        arcball_camera.zoom(y, 0.16);
+                    }
+
+                    glutin::event::WindowEvent::CursorMoved { position, .. } => {
+                        if let Some(prev) = prev_mouse {
+                            if mouse_pressed[0] {
+                                arcball_camera.rotate(
+                                    Vec2::new(prev.x as f32, prev.y as f32),
+                                    Vec2::new(position.x as f32, position.y as f32),
+                                );
+                            } else if mouse_pressed[1] {
+                                let mouse_delta = Vec2::new(
+                                    (position.x - prev.x) as f32,
+                                    (position.y - prev.y) as f32,
+                                );
+                                arcball_camera.pan(mouse_delta);
+                            }
+                        }
+
+                        prev_mouse = Some(position);
+                        println!("pressed = {:?}, prev = {:?}", mouse_pressed, prev_mouse);
+                    }
                     _ => {}
                 },
-                glutin::event::WindowEvent::CursorMoved { position, .. } if prev_mouse.is_none() => {
-                    prev_mouse = Some(position);
-                    println!("init mouse = {:?}", prev_mouse);
-                }
-                glutin::event::WindowEvent::CursorMoved { position, .. } => {
-                    let prev = prev_mouse.unwrap();
-                    if mouse_pressed[0] {
-                        arcball_camera.rotate(
-                            Vector2::new(prev.x as f32, prev.y as f32),
-                            Vector2::new(position.x as f32, position.y as f32),
-                        );
-                    } else if mouse_pressed[1] {
-                        let mouse_delta = Vector2::new(
-                            (position.x - prev.x) as f32,
-                            (position.y - prev.y) as f32,
-                        );
-                        arcball_camera.pan(mouse_delta);
-                    }
-                    prev_mouse = Some(position);
-                    println!("prev = {:?}", prev_mouse);
-                }
-                glutin::event::WindowEvent::MouseInput { state, button, .. } => {
-                    if button == glutin::event::MouseButton::Left {
-                        mouse_pressed[0] = state == glutin::event::ElementState::Pressed;
-                    } else if button == glutin::event::MouseButton::Right {
-                        mouse_pressed[1] = state == glutin::event::ElementState::Pressed;
-                    }
-                }
-                glutin::event::WindowEvent::MouseWheel { delta, .. } => {
-                    let y = match delta {
-                        glutin::event::MouseScrollDelta::LineDelta(_, y) => y,
-                        glutin::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
-                    };
-                    arcball_camera.zoom(y, 0.16);
+                glutin::event::Event::MainEventsCleared => {
+                    control_flow.set_exit();
                 }
                 _ => {}
-            },
-            _ => {}
-        }
-        *control_flow = if should_quit {
-            glutin::event_loop::ControlFlow::Exit
-        } else {
-            glutin::event_loop::ControlFlow::Poll
-        };
-
+            }
+        });
         let proj_view: [[f32; 4]; 4] = (persp_proj * arcball_camera.get_mat4()).into();
         let uniforms = uniform! {
             proj_view: proj_view,
-        };
-        let draw_params = glium::DrawParameters {
-            depth: glium::Depth {
-                test: glium::draw_parameters::DepthTest::IfLess,
-                write: true,
-                ..Default::default()
-            },
-            ..Default::default()
         };
 
         let mut target = display.draw();
@@ -222,6 +228,5 @@ fn main() {
             )
             .unwrap();
         target.finish().unwrap();
-    });
+    }
 }
-
